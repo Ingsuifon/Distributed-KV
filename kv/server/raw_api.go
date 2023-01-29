@@ -32,7 +32,7 @@ func (server *Server) RawPut(_ context.Context, req *kvrpcpb.RawPutRequest) (*kv
 	record := storage.Modify {Data: storage.Put {Key: req.GetKey(), Value: req.GetValue(), Cf: req.GetCf()}}
 	err := server.storage.Write(req.GetContext(), []storage.Modify{record})
 	if err != nil {
-		response.Error = "Failed to put."
+		response.Error = "Failed to put!"
 		return response, err
 	}
 	return response, nil
