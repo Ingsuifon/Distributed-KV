@@ -16,7 +16,6 @@ package raft
 
 import (
 	"errors"
-
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -162,27 +161,69 @@ type Raft struct {
 // newRaft return a raft peer with the given config
 func newRaft(c *Config) *Raft {
 	if err := c.validate(); err != nil {
-		panic(err.Error())
+		panic(err)
 	}
 	// Your Code Here (2A).
-	return nil
+	hardState, _, _ := c.Storage.InitialState()
+	raft := &Raft{
+		id:               c.ID,
+		Term:             hardState.Term,
+		Vote:             hardState.Vote,
+		RaftLog:          newLog(c.Storage),
+		State:            StateFollower,
+		heartbeatTimeout: c.HeartbeatTick,
+		electionTimeout:  c.ElectionTick,
+	}
+	for _, p := range c.peers {
+		raft.Prs[p] = &Progress{Match: raft.RaftLog.offset, Next: raft.RaftLog.LastIndex() + 1}
+	}
+
+	return raft
 }
 
 // sendAppend sends an append RPC with new entries (if any) and the
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
+	term, _ := r.RaftLog.Term(r.Prs[to].Next - 1)
+	index := r.RaftLog.LastIndex()
+	entries := make([]*pb.Entry, 0)
+
+	r.msgs = append(r.msgs, pb.Message{
+		MsgType: pb.MessageType_MsgAppend,
+		To: to,
+		From: r.id,
+		Term: r.Term,
+		Index: index,
+		Entries: entries,
+		LogTerm: term,
+	})
 	return false
 }
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
+	r.msgs = append(r.msgs, pb.Message{
+		MsgType: pb.MessageType_MsgHeartbeat,
+		To:      to,
+		From:    r.id,
+		Term:    r.Term,
+	})
 }
 
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
+	if r.State == StateLeader {
+		r.heartbeatElapsed = (r.heartbeatElapsed + 1) % r.heartbeatTimeout
+		if r.heartbeatElapsed == 0 {
+			for id := range r.Prs {
+				r.sendHeartbeat(id)
+			}
+		}
+	}
+	r.electionElapsed++
 }
 
 // becomeFollower transform this peer's state to Follower
@@ -207,7 +248,14 @@ func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
 	switch r.State {
 	case StateFollower:
+		switch m.MsgType {
+		case pb.MessageType_MsgHeartbeat:
+			r.handleHeartbeat(m)
+		case pb.MessageType_MsgAppend:
+			r.handleAppendEntries(m)
+		}
 	case StateCandidate:
+		r.handleHeartbeat(m)
 	case StateLeader:
 	}
 	return nil
